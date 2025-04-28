@@ -142,4 +142,5 @@ def edit_image():
 if __name__ == '__main__':
     # 使用 host='0.0.0.0' 使其在局域网内可访问
     # debug=True 只在开发时使用，部署时应关闭
-    app.run(host='0.0.0.0', port=5002, debug=True)
+    # app.run(host='0.0.0.0', port=5002, debug=True)
+    pass
