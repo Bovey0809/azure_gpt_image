@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>图像生成与编辑工具</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; }
+        .container { background-color: #fff; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h2 { border-bottom: 1px solid #eee; padding-bottom: 10px; }
+        label { display: block; margin-top: 10px; margin-bottom: 5px; font-weight: bold; }
+        input[type="text"], select, input[type="file"], textarea {
+            width: calc(100% - 22px); /* Adjust width considering padding */
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        textarea { resize: vertical; min-height: 60px; }
+        button {
+            background-color: #007bff; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; transition: background-color 0.3s ease; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #cccccc; cursor: not-allowed; }
+        .result-area { margin-top: 20px; }
+        #loadingIndicator { display: none; margin-top: 15px; color: #555; }
+        #errorMessage { color: red; margin-top: 15px; font-weight: bold; }
+        #generatedImage, #editedImage {
+            max-width: 100%; /* Ensure image fits container */
+            height: auto;
+            margin-top: 10px;
+            border: 1px solid #ddd;
+            padding: 5px;
+            background-color: #eee; /* Placeholder background */
+            display: block; /* Correct display */
+        }
+    </style>
+</head>
+<body>
+
+    <h1>图像生成与编辑工具</h1>
+
+    <!-- 图像生成区域 -->
+    <div class="container">
+        <h2>图像生成</h2>
+        <form id="generateForm">
+            <label for="prompt">提示语 (Prompt):</label>
+            <textarea id="prompt" name="prompt" required placeholder="例如：一只在秋天森林里的红狐狸的照片"></textarea>
+
+            <label for="size">尺寸:</label>
+            <select id="size" name="size">
+                <option value="1024x1024" selected>1024x1024</option>
+                <option value="1792x1024">1792x1024</option>
+                <option value="1024x1792">1024x1792</option>
+                 <!-- 根据 Azure API 支持情况添加更多选项 -->
+            </select>
+
+            <label for="quality">质量:</label>
+             <select id="quality" name="quality">
+                <option value="standard">Standard</option>
+                <option value="medium" selected>Medium</option>
+                <option value="hd">HD</option>
+                 <!-- 根据 Azure API 支持情况添加更多选项 -->
+            </select>
+
+            <button type="submit" id="generateBtn">生成图像</button>
+        </form>
+        <div id="generateLoading" class="loading-indicator" style="display: none;">正在生成图像，请稍候...</div>
+        <div id="generateError" class="error-message" style="display: none;"></div>
+        <div class="result-area">
+            <h3>生成结果:</h3>
+            <img id="generatedImage" src="#" alt="生成的图像将显示在这里" style="display: none;"/>
+        </div>
+    </div>
+
+    <!-- 图像编辑区域 -->
+    <div class="container">
+        <h2>图像编辑</h2>
+        <form id="editForm" enctype="multipart/form-data">
+            <label for="editPrompt">编辑指令 (Prompt):</label>
+            <textarea id="editPrompt" name="prompt" required placeholder="例如：把它变成黑白的"></textarea>
+
+            <label for="imageFile">原始图像 (PNG):</label>
+            <input type="file" id="imageFile" name="image" accept="image/png, image/jpeg" required>
+
+            <label for="maskFile">蒙版图像 (Mask - PNG, 可选):</label>
+            <input type="file" id="maskFile" name="mask" accept="image/png">
+            <small>如果提供了蒙版，编辑将应用于蒙版的透明区域。</small>
+
+            <button type="submit" id="editBtn">编辑图像</button>
+        </form>
+        <div id="editLoading" class="loading-indicator" style="display: none;">正在编辑图像，请稍候...</div>
+        <div id="editError" class="error-message" style="display: none;"></div>
+        <div class="result-area">
+            <h3>编辑结果:</h3>
+            <img id="editedImage" src="#" alt="编辑后的图像将显示在这里" style="display: none;"/>
+        </div>
+    </div>
+
+    <script>
+        const generateForm = document.getElementById('generateForm');
+        const generateBtn = document.getElementById('generateBtn');
+        const generateLoading = document.getElementById('generateLoading');
+        const generateError = document.getElementById('generateError');
+        const generatedImage = document.getElementById('generatedImage');
+
+        const editForm = document.getElementById('editForm');
+        const editBtn = document.getElementById('editBtn');
+        const editLoading = document.getElementById('editLoading');
+        const editError = document.getElementById('editError');
+        const editedImage = document.getElementById('editedImage');
+
+        // --- 图像生成逻辑 ---
+        generateForm.addEventListener('submit', async (event) => {
+            event.preventDefault(); // 阻止表单默认提交行为
+
+            // UI 更新：显示加载，禁用按钮，清除旧错误和图像
+            generateBtn.disabled = true;
+            generateLoading.style.display = 'block';
+            generateError.style.display = 'none';
+            generatedImage.style.display = 'none';
+            generatedImage.src = '#'; // 清除旧图像
+
+            const formData = {
+                prompt: document.getElementById('prompt').value,
+                size: document.getElementById('size').value,
+                quality: document.getElementById('quality').value,
+                n: 1 // 暂时只支持生成一张
+            };
+
+            try {
+                const response = await fetch('/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(formData)
+                });
+
+                const result = await response.json(); // 解析后端返回的 JSON
+
+                if (!response.ok) {
+                    // 如果 HTTP 状态码不是 2xx，则认为是错误
+                    throw new Error(result.error || `HTTP error! status: ${response.status}`);
+                }
+
+                if (result.image_b64) {
+                    // 使用 Base64 数据更新图像 src
+                    generatedImage.src = `data:image/png;base64,${result.image_b64}`;
+                    generatedImage.style.display = 'block'; // 显示图像
+                } else {
+                     throw new Error(result.error || 'API did not return image data.');
+                }
+
+            } catch (error) {
+                console.error('Generation Error:', error);
+                generateError.textContent = `生成失败: ${error.message}`;
+                generateError.style.display = 'block';
+            } finally {
+                // UI 更新：隐藏加载，启用按钮
+                generateLoading.style.display = 'none';
+                generateBtn.disabled = false;
+            }
+        });
+
+
+        // --- 图像编辑逻辑 ---
+        editForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+
+            editBtn.disabled = true;
+            editLoading.style.display = 'block';
+            editError.style.display = 'none';
+            editedImage.style.display = 'none';
+            editedImage.src = '#';
+
+            // 使用 FormData 来处理文件上传
+            const formData = new FormData(editForm);
+
+            try {
+                const response = await fetch('/edit', {
+                    method: 'POST',
+                    body: formData // 直接发送 FormData 对象，浏览器会自动设置 Content-Type 为 multipart/form-data
+                    // 注意：不要手动设置 Content-Type header 当使用 FormData 时
+                });
+
+                const result = await response.json();
+
+                if (!response.ok) {
+                     throw new Error(result.error || `HTTP error! status: ${response.status}`);
+                }
+
+                if (result.image_b64) {
+                    editedImage.src = `data:image/png;base64,${result.image_b64}`;
+                    editedImage.style.display = 'block';
+                } else {
+                    throw new Error(result.error || 'API did not return edited image data.');
+                }
+
+            } catch (error) {
+                console.error('Editing Error:', error);
+                editError.textContent = `编辑失败: ${error.message}`;
+                editError.style.display = 'block';
+            } finally {
+                editLoading.style.display = 'none';
+                editBtn.disabled = false;
+            }
+        });
+
+    </script>
+
+</body>
+</html>
