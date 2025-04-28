@@ -11,8 +11,8 @@ app = Flask(__name__)
 # --- 从环境变量获取配置 ---
 AZURE_API_KEY = os.getenv("AZURE_API_KEY")
 # 从你的 curl 示例中获取端点和版本
-IMAGE_GENERATION_ENDPOINT = "https://imagecoder.openai.azure.com/openai/deployments/gpt-image-1/images/generations?api-version=2025-04-01-preview"
-IMAGE_EDIT_ENDPOINT = "https://imagecoder.openai.azure.com/openai/deployments/gpt-image-1/images/edits?api-version=2025-04-01-preview"
+IMAGE_GENERATION_ENDPOINT = "https://uawimageagent.openai.azure.com/openai/deployments/gpt-image-1/images/generations?api-version=2025-04-01-preview"
+IMAGE_EDIT_ENDPOINT = "https://uawimageagent.openai.azure.com/openai/deployments/gpt-image-1/images/edits?api-version=2025-04-01-preview"
 
 if not AZURE_API_KEY:
     raise ValueError("请设置 AZURE_API_KEY 环境变量")
@@ -48,7 +48,24 @@ def generate_image():
             "n": n
         }
 
-        response = requests.post(IMAGE_GENERATION_ENDPOINT, headers=headers, json=payload)
+        # 添加超时参数，避免请求无限等待
+        response = requests.post(IMAGE_GENERATION_ENDPOINT, headers=headers, json=payload, timeout=120)
+        
+        # 检查是否为内容违规错误
+        if response.status_code == 400:
+            error_data = response.json()
+            error_message = error_data.get('error', {}).get('message', '')
+            error_type = error_data.get('error', {}).get('type', '')
+            error_code = error_data.get('error', {}).get('code', '')
+            
+            # 检查是否为内容审核拦截
+            if 'safety system' in error_message or error_code == 'moderation_blocked':
+                return jsonify({
+                    "error": "Content policy violation",
+                    "message": "Your request was rejected by the AI safety system. Please modify your prompt to avoid prohibited content."
+                }), 400
+        
+        # 只有在没有检测到特定错误时才抛出异常
         response.raise_for_status() # 如果请求失败 (状态码 >= 400)，则抛出异常
 
         result = response.json()
@@ -66,11 +83,19 @@ def generate_image():
         error_message = f"API request failed: {e}"
         if e.response is not None:
             try:
-                # 尝试解析 API 返回的错误详情
-                api_error = e.response.json()
-                error_message += f" - API Response: {api_error}"
+                # 检查内容类型，避免尝试解析HTML为JSON
+                content_type = e.response.headers.get('Content-Type', '')
+                if 'application/json' in content_type:
+                    # 只有在确认是JSON时才解析
+                    api_error = e.response.json()
+                    error_message += f" - API Response: {api_error}"
+                else:
+                    # 非JSON响应，记录状态码和部分响应内容
+                    error_message += f" - API Response Status: {e.response.status_code}, Content-Type: {content_type}"
+                    # 只返回前100个字符避免日志过大
+                    error_message += f", Body preview: {e.response.text[:100]}..."
             except ValueError: # JSONDecodeError 的父类
-                 error_message += f" - API Response Status: {e.response.status_code}, Body: {e.response.text}"
+                error_message += f" - API Response Status: {e.response.status_code}, Body preview: {e.response.text[:100]}..."
         app.logger.error(error_message) # 记录详细错误到服务器日志
         return jsonify({"error": "Image generation failed. Check server logs for details."}), 500
     except Exception as e:
@@ -110,7 +135,22 @@ def edit_image():
         }
 
         # --- 发送请求 ---
-        response = requests.post(IMAGE_EDIT_ENDPOINT, headers=headers, files=files, data=data_payload)
+        response = requests.post(IMAGE_EDIT_ENDPOINT, headers=headers, files=files, data=data_payload, timeout=120)
+        
+        # 检查是否为内容违规错误
+        if response.status_code == 400:
+            error_data = response.json()
+            error_message = error_data.get('error', {}).get('message', '')
+            error_type = error_data.get('error', {}).get('type', '')
+            error_code = error_data.get('error', {}).get('code', '')
+            
+            # 检查是否为内容审核拦截
+            if 'safety system' in error_message or error_code == 'moderation_blocked':
+                return jsonify({
+                    "error": "Content policy violation",
+                    "message": "Your request was rejected by the AI safety system. Please modify your prompt to avoid prohibited content."
+                }), 400
+                
         response.raise_for_status() # 检查 HTTP 错误
 
         # --- 处理响应 ---
@@ -127,11 +167,20 @@ def edit_image():
         error_message = f"API request failed: {e}"
         if e.response is not None:
             try:
-                api_error = e.response.json()
-                error_message += f" - API Response: {api_error}"
-            except ValueError:
-                 error_message += f" - API Response Status: {e.response.status_code}, Body: {e.response.text}"
-        app.logger.error(error_message)
+                # 检查内容类型，避免尝试解析HTML为JSON
+                content_type = e.response.headers.get('Content-Type', '')
+                if 'application/json' in content_type:
+                    # 只有在确认是JSON时才解析
+                    api_error = e.response.json()
+                    error_message += f" - API Response: {api_error}"
+                else:
+                    # 非JSON响应，记录状态码和部分响应内容
+                    error_message += f" - API Response Status: {e.response.status_code}, Content-Type: {content_type}"
+                    # 只返回前100个字符避免日志过大
+                    error_message += f", Body preview: {e.response.text[:100]}..."
+            except ValueError: # JSONDecodeError 的父类
+                error_message += f" - API Response Status: {e.response.status_code}, Body preview: {e.response.text[:100]}..."
+        app.logger.error(error_message) # 记录详细错误到服务器日志
         return jsonify({"error": "Image editing failed. Check server logs for details."}), 500
     except Exception as e:
         app.logger.error(f"An unexpected error occurred during editing: {e}")
